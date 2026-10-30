@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from typing import Dict, List
 
 from config import (
@@ -11,8 +12,13 @@ from config import (
     VIDEO_SIZE_APPROX,
     STREAM_FPS,
     STREAM_RESOLUTION,
+    PAGES_BASE_URL,
+    SUBTITLE_LANG,
+    SERIES_WITH_SUBS,
 )
 from scraper import Episode
+
+SUBS_SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subs")
 
 
 SEASON_MAPS = {
@@ -80,8 +86,36 @@ def build_manifest() -> dict:
     }
 
 
+def build_subtitles(episode: Episode, series_key: str) -> list:
+    """Trả về danh sách phụ đề cho tập (rỗng nếu chưa có file .srt)."""
+    if series_key not in SERIES_WITH_SUBS:
+        return []
+    name = f"ep_{episode.number:03d}.srt"
+    if not os.path.isfile(os.path.join(SUBS_SRC_DIR, series_key, name)):
+        return []
+    return [
+        {
+            "id": f"{series_key}-{SUBTITLE_LANG}-{episode.number:03d}",
+            "url": f"{PAGES_BASE_URL}/subs/{series_key}/{name}",
+            "lang": SUBTITLE_LANG,
+        }
+    ]
+
+
+def copy_subtitles(output_dir: str) -> int:
+    """Chép subs/ vào dist/subs/ để GitHub Pages phục vụ."""
+    if not os.path.isdir(SUBS_SRC_DIR):
+        return 0
+    dest = os.path.join(output_dir, "subs")
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    shutil.copytree(SUBS_SRC_DIR, dest)
+    return sum(len(f) for _, _, f in os.walk(dest))
+
+
 def build_stream(episode: Episode, series_key: str) -> dict:
     template = SERIES_TEMPLATES[series_key]
+    subtitles = build_subtitles(episode, series_key)
     return {
         "streams": [
             {
@@ -94,6 +128,7 @@ def build_stream(episode: Episode, series_key: str) -> dict:
                     "filename": f"{template['name']}.{episode.number:02d}.SelectaVision.{STREAM_RESOLUTION}.mkv",
                     "videoSize": VIDEO_SIZE_APPROX,
                 },
+                **({"subtitles": subtitles} if subtitles else {}),
             }
         ]
     }
@@ -110,6 +145,7 @@ def generate_addon_files(
     ensure_dir(stream_dir)
 
     write_json(f"{output_dir}/manifest.json", build_manifest())
+    print(f"Copied {copy_subtitles(output_dir)} subtitle files")
 
     total_files = 0
     for series_key, episodes in episodes_by_series.items():
